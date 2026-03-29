@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Jerry — Authorize</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<style>
+  body { font-family: system-ui; max-width: 400px; margin: 60px auto; padding: 0 20px; color: #333; }
+  h1 { font-size: 1.3em; }
+  .actions { display: flex; gap: 12px; margin-top: 24px; }
+  button { padding: 10px 24px; border-radius: 6px; border: 1px solid #ccc; cursor: pointer; font-size: 1em; }
+  .approve { background: #22c55e; color: white; border-color: #22c55e; }
+  .deny { background: white; }
+  #status { margin-top: 16px; color: #666; }
+  .login-form input { display: block; width: 100%; padding: 8px; margin: 8px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+</style>
+</head>
+<body>
+  <h1>Authorize access to Jerry</h1>
+  <div id="content">Loading...</div>
+  <div id="status"></div>
+<script>
+// Config is passed via URL hash: #url=<supabase_url>&key=<anon_key>
+// authorization_id comes from query string (set by Supabase Auth redirect)
+const params = new URLSearchParams(window.location.search);
+const hashParams = new URLSearchParams(window.location.hash.slice(1));
+const authorizationId = params.get('authorization_id');
+const SUPABASE_URL = hashParams.get('url') || params.get('url');
+const SUPABASE_ANON_KEY = hashParams.get('key') || params.get('key');
+
+if (!authorizationId || !SUPABASE_URL || !SUPABASE_ANON_KEY) {
+  document.getElementById('content').innerHTML = '<p>Missing configuration. This page should be opened via the OAuth flow.</p>';
+} else {
+  const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  init();
+}
+
+async function init() {
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) {
+    document.getElementById('content').innerHTML =
+      '<p>Log in to approve access.</p>' +
+      '<div class="login-form">' +
+      '<input type="email" id="email" placeholder="Email">' +
+      '<input type="password" id="password" placeholder="Password">' +
+      '<button onclick="doLogin()">Log in</button></div>';
+    return;
+  }
+  showConsent();
+}
+
+async function doLogin() {
+  const email = document.getElementById('email').value;
+  const password = document.getElementById('password').value;
+  document.getElementById('status').textContent = 'Logging in...';
+  const { error } = await sb.auth.signInWithPassword({ email, password });
+  if (error) { document.getElementById('status').textContent = error.message; return; }
+  showConsent();
+}
+
+async function showConsent() {
+  const { data, error } = await sb.auth.oauth.getAuthorizationDetails(authorizationId);
+  if (error) { document.getElementById('content').innerHTML = '<p>' + error.message + '</p>'; return; }
+  const name = (data.client && data.client.name) || 'AI Agent';
+  document.getElementById('content').innerHTML =
+    '<p><strong>' + name + '</strong> is requesting access to your knowledge graph.</p>' +
+    '<div class="actions">' +
+    '<button class="approve" onclick="decide(true)">Approve</button>' +
+    '<button class="deny" onclick="decide(false)">Deny</button></div>';
+}
+
+async function decide(approve) {
+  document.getElementById('status').textContent = approve ? 'Approving...' : 'Denying...';
+  const result = approve
+    ? await sb.auth.oauth.approveAuthorization(authorizationId)
+    : await sb.auth.oauth.denyAuthorization(authorizationId);
+  if (result.error) { document.getElementById('status').textContent = result.error.message; return; }
+  if (result.data && result.data.redirect_to) { window.location.href = result.data.redirect_to; }
+  else { document.getElementById('status').textContent = 'Done. Close this window.'; }
+}
+</script>
+</body>
+</html>
