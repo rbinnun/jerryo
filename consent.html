@@ -22,16 +22,17 @@
 <script>
 // Config is passed via URL hash: #url=<supabase_url>&key=<anon_key>
 // authorization_id comes from query string (set by Supabase Auth redirect)
-const params = new URLSearchParams(window.location.search);
-const hashParams = new URLSearchParams(window.location.hash.slice(1));
-const authorizationId = params.get('authorization_id');
-const SUPABASE_URL = hashParams.get('url') || params.get('url');
-const SUPABASE_ANON_KEY = hashParams.get('key') || params.get('key');
+// Config: updated by deploy-remote.ts on each setup
+const SUPABASE_URL = 'https://mcgapkptjcdccqlxzlmz.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1jZ2Fwa3B0amNkY2NxbHh6bG16Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ4MDAyNDYsImV4cCI6MjA5MDM3NjI0Nn0.RzED7_8HZJtqoGP1oIIW3ip4IwcfwxVD68OwNeCoD7k';
 
-if (!authorizationId || !SUPABASE_URL || !SUPABASE_ANON_KEY) {
-  document.getElementById('content').innerHTML = '<p>Missing configuration. This page should be opened via the OAuth flow.</p>';
+const params = new URLSearchParams(window.location.search);
+const authorizationId = params.get('authorization_id');
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+if (!authorizationId) {
+  document.getElementById('content').innerHTML = '<p>Missing authorization_id. This page should be opened via the OAuth flow.</p>';
 } else {
-  const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   init();
 }
 
