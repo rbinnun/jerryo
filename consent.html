@@ -3,7 +3,7 @@
 <head>
 <title>Jerry — Authorize</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <style>
   body { font-family: system-ui; max-width: 400px; margin: 60px auto; padding: 0 20px; color: #333; }
   h1 { font-size: 1.3em; }
@@ -20,85 +20,60 @@
   <div id="content">Loading...</div>
   <div id="status"></div>
 <script>
-var sb, authorizationId;
+const SUPABASE_URL = 'https://gxrdnfxvclbwmcppsnxl.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd4cmRuZnh2Y2xid21jcHBzbnhsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ4MDQyODAsImV4cCI6MjA5MDM4MDI4MH0.vlz29-PPczWDL0GvQGXx9PghHJLMx89c7shEd5NdqTQ';
+const params = new URLSearchParams(window.location.search);
+const authorizationId = params.get('authorization_id');
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-window.addEventListener('DOMContentLoaded', function() {
-  try {
-    var SUPABASE_URL = 'https://gxrdnfxvclbwmcppsnxl.supabase.co';
-    var SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd4cmRuZnh2Y2xid21jcHBzbnhsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ4MDQyODAsImV4cCI6MjA5MDM4MDI4MH0.vlz29-PPczWDL0GvQGXx9PghHJLMx89c7shEd5NdqTQ';
-    var params = new URLSearchParams(window.location.search);
-    authorizationId = params.get('authorization_id');
-
-    if (!window.supabase) {
-      document.getElementById('content').innerHTML = '<p>Error: Supabase library failed to load.</p>';
-      return;
-    }
-    sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
-    if (!authorizationId) {
-      document.getElementById('content').innerHTML = '<p>Missing authorization_id.</p>';
-    } else {
-      init();
-    }
-  } catch(e) {
-    document.getElementById('content').innerHTML = '<p>Error: ' + e.message + '</p>';
-  }
-});
+if (!authorizationId) {
+  document.getElementById('content').innerHTML = '<p>Missing authorization_id.</p>';
+} else {
+  init();
+}
 
 async function init() {
-  try {
-    // Show login form directly — no session exists on GitHub Pages (different domain from Supabase)
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) {
     document.getElementById('content').innerHTML =
       '<p>Log in to approve access.</p>' +
       '<div class="login-form">' +
       '<input type="email" id="email" placeholder="Email">' +
       '<input type="password" id="password" placeholder="Password">' +
       '<button onclick="doLogin()">Log in</button></div>';
-  } catch(e) {
-    document.getElementById('content').innerHTML = '<p>Error: ' + e.message + '</p>';
+    return;
   }
+  showConsent();
 }
 
 async function doLogin() {
-  var email = document.getElementById('email').value;
-  var password = document.getElementById('password').value;
+  const email = document.getElementById('email').value;
+  const password = document.getElementById('password').value;
   document.getElementById('status').textContent = 'Logging in...';
-  try {
-    var result = await sb.auth.signInWithPassword({ email: email, password: password });
-    if (result.error) { document.getElementById('status').textContent = result.error.message; return; }
-    showConsent();
-  } catch(e) {
-    document.getElementById('status').textContent = 'Error: ' + e.message;
-  }
+  const { error } = await sb.auth.signInWithPassword({ email, password });
+  if (error) { document.getElementById('status').textContent = error.message; return; }
+  showConsent();
 }
 
 async function showConsent() {
-  try {
-    var result = await sb.auth.oauth.getAuthorizationDetails(authorizationId);
-    if (result.error) { document.getElementById('content').innerHTML = '<p>' + result.error.message + '</p>'; return; }
-    var name = (result.data.client && result.data.client.name) || 'AI Agent';
-    document.getElementById('content').innerHTML =
-      '<p><strong>' + name + '</strong> is requesting access to your knowledge graph.</p>' +
-      '<div class="actions">' +
-      '<button class="approve" onclick="decide(true)">Approve</button>' +
-      '<button class="deny" onclick="decide(false)">Deny</button></div>';
-  } catch(e) {
-    document.getElementById('content').innerHTML = '<p>Error: ' + e.message + '</p>';
-  }
+  const { data, error } = await sb.auth.oauth.getAuthorizationDetails(authorizationId);
+  if (error) { document.getElementById('content').innerHTML = '<p>' + error.message + '</p>'; return; }
+  const name = (data.client && data.client.name) || 'AI Agent';
+  document.getElementById('content').innerHTML =
+    '<p><strong>' + name + '</strong> is requesting access to your knowledge graph.</p>' +
+    '<div class="actions">' +
+    '<button class="approve" onclick="decide(true)">Approve</button>' +
+    '<button class="deny" onclick="decide(false)">Deny</button></div>';
 }
 
 async function decide(approve) {
   document.getElementById('status').textContent = approve ? 'Approving...' : 'Denying...';
-  try {
-    var result = approve
-      ? await sb.auth.oauth.approveAuthorization(authorizationId)
-      : await sb.auth.oauth.denyAuthorization(authorizationId);
-    if (result.error) { document.getElementById('status').textContent = result.error.message; return; }
-    if (result.data && result.data.redirect_to) { window.location.href = result.data.redirect_to; }
-    else { document.getElementById('status').textContent = 'Done. Close this window.'; }
-  } catch(e) {
-    document.getElementById('status').textContent = 'Error: ' + e.message;
-  }
+  const result = approve
+    ? await sb.auth.oauth.approveAuthorization(authorizationId)
+    : await sb.auth.oauth.denyAuthorization(authorizationId);
+  if (result.error) { document.getElementById('status').textContent = result.error.message; return; }
+  if (result.data && result.data.redirect_to) { window.location.href = result.data.redirect_to; }
+  else { document.getElementById('status').textContent = 'Done. Close this window.'; }
 }
 </script>
 </body>
