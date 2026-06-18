@@ -8,9 +8,13 @@
      Hosted as a plain static file (GitHub Pages) — the "jerryo approach" — so the browser
      gets real text/html. This sidesteps BOTH (a) Supabase's *.supabase.co domain rewriting
      text/html -> text/plain (anti-phishing), and (b) the Deno Deploy token we were blocked on.
-     The whole OAuth handshake runs in the browser via supabase-js; the only embedded secret is
-     the project PUBLISHABLE key, which is public by design (identifies the project, not the user).
-     The SECRET/service key never appears here. -->
+     Sign-in is PASSWORDLESS via a MAGIC LINK: signInWithOtp emails a sign-in link whose
+     emailRedirectTo is THIS page (incl. ?authorization_id). Clicking it returns here with a
+     session in the URL, which supabase-js recovers (detectSessionInUrl) -> consent screen.
+     (A typed code would need a custom email template, which Supabase blocks on the free tier
+     with the default email provider — so we use the default link template as-is.)
+     The only embedded secret is the project PUBLISHABLE key, public by design; the SECRET/
+     service key never appears here. -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <style>
   :root { color-scheme: light dark; }
@@ -18,6 +22,7 @@
          max-width: 420px; margin: 60px auto; padding: 0 20px; color: #222; }
   h1 { font-size: 1.3em; }
   p { line-height: 1.45; }
+  a { color: #2563eb; }
   .actions { display: flex; gap: 12px; margin-top: 24px; }
   button { padding: 10px 24px; border-radius: 6px; border: 1px solid #ccc; cursor: pointer; font-size: 1em; }
   .approve { background: #22c55e; color: white; border-color: #22c55e; }
@@ -25,6 +30,7 @@
   #status { margin-top: 16px; color: #666; min-height: 1.2em; }
   .login-form input { display: block; width: 100%; padding: 8px; margin: 8px 0;
          border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+  .muted { font-size: .9em; color: #666; margin-top: 12px; }
   .brand { font-weight: 700; }
 </style>
 </head>
@@ -41,8 +47,13 @@ const params = new URLSearchParams(window.location.search);
 const authorizationId = params.get('authorization_id');
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
 
+let currentEmail = '';
 const content = () => document.getElementById('content');
 const setStatus = (msg) => { document.getElementById('status').textContent = msg || ''; };
+// HTML-escape for values we inject into innerHTML (status uses textContent, so no esc there).
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
+  (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const focusEl = (id) => { const el = document.getElementById(id); if (el) el.focus(); };
 
 if (!authorizationId) {
   content().innerHTML =
@@ -53,44 +64,69 @@ if (!authorizationId) {
 }
 
 async function init() {
+  // If we just came back from the email link, supabase-js has the session from the URL.
   const { data: { session } } = await sb.auth.getSession();
-  if (!session) { showLogin(); return; }
-  showConsent();
+  if (session) { showConsent(); return; }
+  showEmailForm();
 }
 
-function showLogin() {
+// ── Step 1 — email → send a passwordless sign-in link back to THIS page ──────────────────
+function showEmailForm() {
   content().innerHTML =
-    '<p>Sign in to your <span class="brand">J2</span> account to approve access.</p>' +
+    '<p>Sign in to your <span class="brand">J2</span> account to approve access. ' +
+    'We\'ll email you a one-time sign-in link.</p>' +
     '<div class="login-form">' +
-    '<input type="email" id="email" placeholder="Email" autocomplete="email">' +
-    '<input type="password" id="password" placeholder="Password" autocomplete="current-password">' +
-    '<button onclick="doLogin()">Sign in</button></div>';
+    '<input type="email" id="email" placeholder="you@example.com" autocomplete="email" value="' + esc(currentEmail) + '">' +
+    '<button onclick="sendLink()">Email me a sign-in link</button></div>';
+  focusEl('email');
 }
 
-async function doLogin() {
+async function sendLink() {
   const email = document.getElementById('email').value.trim();
-  const password = document.getElementById('password').value;
-  if (!email || !password) { setStatus('Enter your email and password.'); return; }
-  setStatus('Signing in…');
-  const { error } = await sb.auth.signInWithPassword({ email, password });
+  if (!email) { setStatus('Enter your email.'); return; }
+  setStatus('Sending sign-in link…');
+  const { error } = await sb.auth.signInWithOtp({
+    email,
+    options: { emailRedirectTo: window.location.href, shouldCreateUser: true },
+  });
   if (error) { setStatus(error.message); return; }
+  currentEmail = email;
   setStatus('');
-  showConsent();
+  showLinkSent();
 }
 
+// ── Step 2 — wait for the user to click the emailed link (which returns them here) ───────
+function showLinkSent() {
+  content().innerHTML =
+    '<p>Check your email — we sent a sign-in link to <strong>' + esc(currentEmail) + '</strong>.</p>' +
+    '<p>Open it <em>in this browser</em> and you\'ll come right back here, signed in and ready to approve.</p>' +
+    '<p class="muted"><a href="#" onclick="showEmailForm();return false;">Use a different email</a> · ' +
+    '<a href="#" onclick="resendLink();return false;">Resend link</a></p>';
+}
+
+async function resendLink() {
+  setStatus('Resending…');
+  const { error } = await sb.auth.signInWithOtp({
+    email: currentEmail,
+    options: { emailRedirectTo: window.location.href, shouldCreateUser: true },
+  });
+  setStatus(error ? error.message : 'Link resent — check your email.');
+}
+
+// ── Step 3 — show the consent screen and record the decision ─────────────────────────────
 async function showConsent() {
   setStatus('');
   const { data, error } = await sb.auth.oauth.getAuthorizationDetails(authorizationId);
-  if (error) { content().innerHTML = '<p>' + error.message + '</p>'; return; }
+  if (error) { content().innerHTML = '<p>' + esc(error.message) + '</p>'; return; }
   // Already consented → the server just hands back a redirect.
   if (data && data.redirect_to && !data.client) { window.location.href = data.redirect_to; return; }
   const name = (data.client && data.client.name) || 'An AI agent';
   const scopes = String((data && data.scope) || '').split(/\s+/).filter(Boolean);
   const scopeList = scopes.length
-    ? '<p>Requested permissions: ' + scopes.map((s) => '<code>' + s + '</code>').join(' ') + '</p>'
+    ? '<p>Requested permissions: ' + scopes.map((s) => '<code>' + esc(s) + '</code>').join(' ') + '</p>'
     : '';
   content().innerHTML =
-    '<p><strong>' + name + '</strong> is requesting access to your ' +
+    '<p><strong>' + esc(name) + '</strong> is requesting access to your ' +
     '<span class="brand">J2</span> knowledge graph.</p>' +
     scopeList +
     '<div class="actions">' +
