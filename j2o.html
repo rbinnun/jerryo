@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>J2 — Authorize</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Static, client-side OAuth 2.1 consent/login page for the J2 "loop" MCP server.
+     Hosted as a plain static file (GitHub Pages) — the "jerryo approach" — so the browser
+     gets real text/html. This sidesteps BOTH (a) Supabase's *.supabase.co domain rewriting
+     text/html -> text/plain (anti-phishing), and (b) the Deno Deploy token we were blocked on.
+     The whole OAuth handshake runs in the browser via supabase-js; the only embedded secret is
+     the project PUBLISHABLE key, which is public by design (identifies the project, not the user).
+     The SECRET/service key never appears here. -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+         max-width: 420px; margin: 60px auto; padding: 0 20px; color: #222; }
+  h1 { font-size: 1.3em; }
+  p { line-height: 1.45; }
+  .actions { display: flex; gap: 12px; margin-top: 24px; }
+  button { padding: 10px 24px; border-radius: 6px; border: 1px solid #ccc; cursor: pointer; font-size: 1em; }
+  .approve { background: #22c55e; color: white; border-color: #22c55e; }
+  .deny { background: white; }
+  #status { margin-top: 16px; color: #666; min-height: 1.2em; }
+  .login-form input { display: block; width: 100%; padding: 8px; margin: 8px 0;
+         border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+  .brand { font-weight: 700; }
+</style>
+</head>
+<body>
+  <h1>Authorize access to <span class="brand">J2</span></h1>
+  <div id="content">Loading…</div>
+  <div id="status"></div>
+<script>
+// ── J2 project config (public values only) ──────────────────────────────────────────────
+const SUPABASE_URL = 'https://wdpvwsmcuudpngujymch.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_tpBWjOMiOuaeWksl8MtNLw_hRZwl_2J';
+
+const params = new URLSearchParams(window.location.search);
+const authorizationId = params.get('authorization_id');
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+
+const content = () => document.getElementById('content');
+const setStatus = (msg) => { document.getElementById('status').textContent = msg || ''; };
+
+if (!authorizationId) {
+  content().innerHTML =
+    '<p>This page was opened without an <code>authorization_id</code>. ' +
+    'Start the connection again from your client (e.g. re-click <strong>Connect</strong> in claude.ai).</p>';
+} else {
+  init();
+}
+
+async function init() {
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) { showLogin(); return; }
+  showConsent();
+}
+
+function showLogin() {
+  content().innerHTML =
+    '<p>Sign in to your <span class="brand">J2</span> account to approve access.</p>' +
+    '<div class="login-form">' +
+    '<input type="email" id="email" placeholder="Email" autocomplete="email">' +
+    '<input type="password" id="password" placeholder="Password" autocomplete="current-password">' +
+    '<button onclick="doLogin()">Sign in</button></div>';
+}
+
+async function doLogin() {
+  const email = document.getElementById('email').value.trim();
+  const password = document.getElementById('password').value;
+  if (!email || !password) { setStatus('Enter your email and password.'); return; }
+  setStatus('Signing in…');
+  const { error } = await sb.auth.signInWithPassword({ email, password });
+  if (error) { setStatus(error.message); return; }
+  setStatus('');
+  showConsent();
+}
+
+async function showConsent() {
+  setStatus('');
+  const { data, error } = await sb.auth.oauth.getAuthorizationDetails(authorizationId);
+  if (error) { content().innerHTML = '<p>' + error.message + '</p>'; return; }
+  // Already consented → the server just hands back a redirect.
+  if (data && data.redirect_to && !data.client) { window.location.href = data.redirect_to; return; }
+  const name = (data.client && data.client.name) || 'An AI agent';
+  const scopes = String((data && data.scope) || '').split(/\s+/).filter(Boolean);
+  const scopeList = scopes.length
+    ? '<p>Requested permissions: ' + scopes.map((s) => '<code>' + s + '</code>').join(' ') + '</p>'
+    : '';
+  content().innerHTML =
+    '<p><strong>' + name + '</strong> is requesting access to your ' +
+    '<span class="brand">J2</span> knowledge graph.</p>' +
+    scopeList +
+    '<div class="actions">' +
+    '<button class="approve" onclick="decide(true)">Approve</button>' +
+    '<button class="deny" onclick="decide(false)">Deny</button></div>';
+}
+
+async function decide(approve) {
+  setStatus(approve ? 'Approving…' : 'Denying…');
+  const result = approve
+    ? await sb.auth.oauth.approveAuthorization(authorizationId)
+    : await sb.auth.oauth.denyAuthorization(authorizationId);
+  if (result.error) { setStatus(result.error.message); return; }
+  if (result.data && result.data.redirect_to) { window.location.href = result.data.redirect_to; }
+  else { setStatus('Done. You can close this window.'); }
+}
+</script>
+</body>
+</html>
