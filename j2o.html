@@ -8,11 +8,11 @@
      Hosted as a plain static file (GitHub Pages) — the "jerryo approach" — so the browser
      gets real text/html. This sidesteps BOTH (a) Supabase's *.supabase.co domain rewriting
      text/html -> text/plain (anti-phishing), and (b) the Deno Deploy token we were blocked on.
-     Sign-in is PASSWORDLESS via a MAGIC LINK: signInWithOtp emails a sign-in link whose
-     emailRedirectTo is THIS page (incl. ?authorization_id). Clicking it returns here with a
-     session in the URL, which supabase-js recovers (detectSessionInUrl) -> consent screen.
-     (A typed code would need a custom email template, which Supabase blocks on the free tier
-     with the default email provider — so we use the default link template as-is.)
+     Sign-in is EITHER email+password (signInWithPassword — no email sent) OR a passwordless
+     MAGIC LINK: signInWithOtp emails a sign-in link whose emailRedirectTo is THIS page (incl.
+     ?authorization_id). Clicking it returns here with a session in the URL, which supabase-js
+     recovers (detectSessionInUrl) -> consent screen. (Password avoids the built-in email
+     provider's low hourly rate limit; the magic link stays as a no-password fallback.)
      The only embedded secret is the project PUBLISHABLE key, public by design; the SECRET/
      service key never appears here. -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -73,11 +73,14 @@ async function init() {
 // ── Step 1 — email → send a passwordless sign-in link back to THIS page ──────────────────
 function showEmailForm() {
   content().innerHTML =
-    '<p>Sign in to your <span class="brand">J2</span> account to approve access. ' +
-    'We\'ll email you a one-time sign-in link.</p>' +
+    '<p>Sign in to your <span class="brand">J2</span> account to approve access.</p>' +
     '<div class="login-form">' +
     '<input type="email" id="email" placeholder="you@example.com" autocomplete="email" value="' + esc(currentEmail) + '">' +
-    '<button onclick="sendLink()">Email me a sign-in link</button></div>';
+    '<input type="password" id="password" placeholder="Password" autocomplete="current-password" ' +
+    'onkeydown="if(event.key===\'Enter\')signInPassword()">' +
+    '<button onclick="signInPassword()">Sign in</button></div>' +
+    '<p class="muted">No password, or prefer not to use one? ' +
+    '<a href="#" onclick="sendLink();return false;">Email me a one-time sign-in link</a> instead.</p>';
   focusEl('email');
 }
 
@@ -93,6 +96,19 @@ async function sendLink() {
   currentEmail = email;
   setStatus('');
   showLinkSent();
+}
+
+// ── Step 1b — email + password sign-in (no email sent; for accounts that have a password) ─
+async function signInPassword() {
+  const email = document.getElementById('email').value.trim();
+  const password = document.getElementById('password').value;
+  if (!email || !password) { setStatus('Enter your email and password.'); return; }
+  setStatus('Signing in…');
+  const { error } = await sb.auth.signInWithPassword({ email, password });
+  if (error) { setStatus(error.message); return; }
+  currentEmail = email;
+  setStatus('');
+  showConsent();
 }
 
 // ── Step 2 — wait for the user to click the emailed link (which returns them here) ───────
